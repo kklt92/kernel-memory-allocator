@@ -51,15 +51,119 @@
 
 /************Global Variables*********************************************/
 
+static kma_page_t *page_entry = NULL;
+
 /************Function Prototypes******************************************/
 
 /************External Declaration*****************************************/
 
 /**************Implementation***********************************************/
+struct page_header {
+  kma_page_t *page;
+};
+
+struct node {
+  void *addr;
+  int size;
+  struct node *prev;
+  struct node *next;
+};
+
+struct rm_controller {
+  int   used;
+  int   free;
+  struct node free_list;
+  struct node used_list;
+};
+
+void *current_page_begin_addr(void *addr) {
+  return (void*)((unsigned long)addr & ~((unsigned long)(PAGESIZE-1)));
+}
+
+void *current_page_end_addr(void *addr) {
+  return (void*)((char*)current_page_begin_addr(addr) + PAGESIZE);
+}
+
+void list_append(struct node *newNode, struct node *list) {
+  newNode->prev = list->prev;
+  newNode->next = list;
+  list->prev = newNode;
+  newNode->prev->next = newNode;
+}
+
+void list_insert(struct node *newNode, struct node *list, int pos) {
+  if(pos < 1)
+    fprintf(stderr, "insert position is less than 1");
+  else {
+    struct node *curr;
+    
+    curr = list;
+    int i = 1;
+
+    while(i != pos) {
+      curr = curr->next;
+      i++;
+      if(curr == list){
+        fprintf(stderr, "the position is larger than list size");
+        break;
+      }
+    }
+    newNode->prev = curr;
+    newNode->next = curr->next;
+    curr->next = newNode;
+    newNode->next->prev = newNode;
+  }
+}
+
+void list_remove(struct node *node) {
+  node->prev->next = node->next;
+  node->next->prev = node->prev;
+}
+//void list_append(struct node *newNode, struct node *list) {
+//  list->next = newNode;
+//}
+
+void init_page_entry() {
+  struct page_header *header;
+  struct rm_controller *rm;
+  struct node *curr, *end;
+  page_entry = get_page();
+
+  /* allocate header and controller to entry page. */
+  header = (struct page_header*)page_entry->ptr;
+  rm = (struct rm_controller*)((char*)page_entry->ptr + sizeof(struct page_header));
+
+  /* initial elements in header and controller */
+  header->page = page_entry;
+  rm->used = 0;
+  rm->free = 0;
+  rm->free_list.prev = &(rm->free_list);
+  rm->free_list.next = &(rm->free_list);
+  rm->used_list.prev = &(rm->used_list);
+  rm->used_list.next = &(rm->used_list);
+  
+  curr = (struct node*)((char*)rm + sizeof(struct rm_controller));
+  end = (struct node*)((char*)current_page_end_addr(curr));
+
+  /* initial rest of  nodes to free_list. */
+  while(curr + 1 < end) {
+    list_append(curr, &(rm->free_list));
+    curr++;
+  }
+}
+  
+
+
+
 
 void*
 kma_malloc(kma_size_t size)
 {
+  if(page_entry == NULL)
+    init_page_entry(); 
+  
+
+
   return NULL;
 }
 
