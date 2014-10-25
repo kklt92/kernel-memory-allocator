@@ -37,6 +37,7 @@
 /************System include***********************************************/
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 /************Private include**********************************************/
 #include "kma_page.h"
@@ -55,6 +56,8 @@ static kma_page_t *page_entry = NULL;
 
 /************Function Prototypes******************************************/
 
+void *allocate_mem(kma_size_t);
+
 /************External Declaration*****************************************/
 
 /**************Implementation***********************************************/
@@ -72,8 +75,9 @@ struct node {
 struct rm_controller {
   int   used;
   int   free;
-  struct node free_list;
-  struct node used_list;
+  struct node free_mem_list;
+  struct node available_node_list;
+  struct node page_list;
 };
 
 void *current_page_begin_addr(void *addr) {
@@ -119,9 +123,6 @@ void list_remove(struct node *node) {
   node->prev->next = node->next;
   node->next->prev = node->prev;
 }
-//void list_append(struct node *newNode, struct node *list) {
-//  list->next = newNode;
-//}
 
 void init_page_entry() {
   struct page_header *header;
@@ -137,40 +138,218 @@ void init_page_entry() {
   header->page = page_entry;
   rm->used = 0;
   rm->free = 0;
-  rm->free_list.prev = &(rm->free_list);
-  rm->free_list.next = &(rm->free_list);
-  rm->used_list.prev = &(rm->used_list);
-  rm->used_list.next = &(rm->used_list);
+  rm->free_mem_list.prev = &(rm->free_mem_list);
+  rm->free_mem_list.next = &(rm->free_mem_list);
+  rm->available_node_list.prev = &(rm->available_node_list);
+  rm->available_node_list.next = &(rm->available_node_list);
+  rm->page_list.prev = &(rm->page_list);
+  rm->page_list.next = &(rm->page_list);
   
   curr = (struct node*)((char*)rm + sizeof(struct rm_controller));
   end = (struct node*)((char*)current_page_end_addr(curr));
 
-  /* initial rest of  nodes to free_list. */
+  /* initial rest of  nodes to available_node_list. */
   while(curr + 1 < end) {
-    list_append(curr, &(rm->free_list));
+    list_append(curr, &(rm->available_node_list));
     curr++;
   }
 }
+
+void *rm_info() {
+  void *ptr;
+  ptr = (struct rm_controller*)((char*)page_entry->ptr + sizeof(struct page_header));
+
+  return ptr;
+}
+
+struct node *find_available_node() {
+  struct rm_controller *rm;
+  struct node *curr;
+
+  rm = rm_info();
+
+  /* if there are no more available node */
+  if(rm->available_node_list.next == &(rm->available_node_list)) {
+    newPage_of_node();
+  }
+  curr = rm->available_node_list.next;
+
+  return curr;
+}
+
+void newPage_of_node() {
+  struct rm_controller *rm;
+  kma_page_t *page;
+  struct page_header *header;
+  struct node *curr, *end;
+  
+  rm = rm_info();
+  page = get_page();
+  header = (struct page_header*)page->ptr;
+  header->page = page;
+  curr = (struct node*)((char*)header + sizeof(struct page_header));
+  end = (struct node*)((char*)current_page_end_addr(curr));
+  while(curr + 1<end) {
+    list_append(curr, &(rm->available_node_list));
+    curr++;
+  }
+  curr = find_available_node();
+  curr->addr = (void*)page;
+  list_remove(curr);
+  list_append(curr, &(rm->page_list));
+}
+
+
+
   
 
+
+
+void *allocate_mem(kma_size_t size) {
+  struct node *curr, *node;
+  kma_page_t *page;
+  struct page_header *header;
+  struct rm_controller *rm = rm_info();
+  void *ptr;
+  int available = 0;
+  
+  /* find a free place to allocate request */
+  curr = rm->free_mem_list.next;
+  while(curr != &(rm->free_mem_list)) {
+    if(curr->size >= size) {
+      available = 1;
+      break;
+    }
+    curr = curr->next;
+  }
+
+  /* if no more free memory, 
+   * then create a new page to store.
+   */
+  if(available == 0) {
+    page = get_page();
+    header = (struct page_header*)page->ptr;
+    header->page = page;
+    curr = find_available_node();
+    curr->addr = (void*)((char*)page->ptr + sizeof(struct page_header));
+    curr->size = page->size - sizeof(struct page_header);
+  }
+    
+  /* allocate memeory and resize current node's address and size */
+  ptr = curr->addr;
+  curr->addr = (void*)((char*)curr->addr + size);
+  curr->size = curr->size - size;
+  if(curr->size == 0) {
+    if(available == 1)
+      list_remove(curr);
+    list_insert(curr, &(rm->available_node_list), 1);
+  }
+  else {
+    if(available == 0) {
+      list_remove(curr);
+      list_append(curr, &(rm->free_mem_list));
+    }
+  }
+  rm->used++;
+  return ptr;
+}
 
 
 
 void*
 kma_malloc(kma_size_t size)
 {
+  if(size > PAGESIZE - sizeof(void*)) {
+      return NULL;
+  }
+
   if(page_entry == NULL)
     init_page_entry(); 
   
 
-
-  return NULL;
+  return allocate_mem(size);
 }
 
 void
 kma_free(void* ptr, kma_size_t size)
 {
-  ;
+  struct rm_controller *rm;
+  struct node *curr, *node;
+  struct page_header *header;
+  void* end_addr;
+  kma_page_t pageFree[1000];
+  int combine = 0;
+  
+  rm = rm_info();
+
+  end_addr = (void*)((char*)ptr + size);
+
+  // TODO verify the ptr and size validation.
+  
+  /* find if this memory piece is next to a free memory piece */
+  curr = rm->free_mem_list.next;
+  while(curr != &(rm->free_mem_list)) {
+    if(curr->addr == end_addr) {
+      if(combine == 0){
+        combine = 1;
+        curr->size = curr->size + size;
+        curr->addr = ptr;
+        node = curr;
+      }
+      else if(combine == 1){
+        curr->size = curr->size + node->size;
+        curr->addr = node->addr;
+        list_remove(node);
+        list_insert(node, &(rm->available_node_list), 1);
+        break;
+      }
+    }
+    else if(((char*)curr->addr + curr->size) == ptr) {
+      if(combine == 0) {
+        combine = 1;
+        curr->size = curr->size + size;
+        node = curr;
+      }
+      else if(combine == 1) {
+        curr->size = curr->size + node->size;
+        list_remove(node);
+        list_insert(node, &(rm->available_node_list), 1);
+        break;
+      }
+    }
+      
+    curr = curr->next;
+  }
+
+  if(combine == 0) {
+    node = find_available_node();
+    node->addr = ptr;
+    node->size = size;
+    list_remove(node);
+    list_insert(node, &(rm->free_mem_list), 1);
+  }
+  rm->free++;
+  
+  if(rm->used == rm->free) {
+    /* remove all page which used for allocate request memory */
+    curr = rm->free_mem_list.next;
+    while(curr != &(rm->free_mem_list)) {
+      header = (struct page_header*)current_page_begin_addr(curr->addr);
+      free_page(header->page);
+      curr = curr->next;
+    }
+    /* remove all page used for store node */
+    curr = rm->page_list.next;
+    while(curr != &(rm->page_list)) {
+      free_page(curr->addr);
+      curr = curr->next;
+    }
+
+    free_page(page_entry);
+    page_entry = NULL;
+
+  }
 }
+
 
 #endif // KMA_RM
