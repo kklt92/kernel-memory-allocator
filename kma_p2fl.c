@@ -75,6 +75,7 @@ struct page_header {
   kma_page_t *page;
 };
 
+
 struct list_header {
   int size;
   int avai_size;
@@ -85,6 +86,7 @@ struct p2fl_controller {
   int used;
   int free;
   struct list_header lh[HEADERSIZE];
+  struct list_header page_list;
 };
 
 void list_insert(struct free_block *block, struct free_block  *l) {
@@ -123,6 +125,14 @@ void init_page_entry() {
     control->lh[i].blk = temp;
     control->lh[i].blk->next = NULL;
   }
+  control->page_list.size = 0;
+  control->page_list.avai_size = 0;
+  temp = (struct free_block*)((char*)page_entry->ptr + sizeof(struct page_header) 
+        + sizeof(struct p2fl_controller) + HEADERSIZE * (sizeof(struct free_block)));
+  control->page_list.blk = temp;
+  control->page_list.blk->next = NULL;
+  
+  
 }
 
 void *plfl_info() {
@@ -133,10 +143,14 @@ void *plfl_info() {
 }
 
 void new_free_block(struct list_header *l) {
+  struct p2fl_controller *control;
   struct free_block *curr;
   struct page_header *header;
   kma_page_t *page;
   void *page_end_addr;
+
+  control = plfl_info();
+
 
   page = get_page();
   header = (struct page_header*)page->ptr;
@@ -157,6 +171,12 @@ void new_free_block(struct list_header *l) {
     }
 
   }
+  
+  curr = (void*)page;
+  curr->next = NULL;
+  list_insert(curr, control->page_list.blk);
+
+  
 
 }
 
@@ -199,7 +219,7 @@ kma_free(void* ptr, kma_size_t size)
 {
   struct p2fl_controller *control;
   struct page_header *header;
-  struct free_block *curr;
+  struct free_block *curr, *temp;
   int i=0;
 
   control = plfl_info();
@@ -216,6 +236,17 @@ kma_free(void* ptr, kma_size_t size)
   control->free++;
 
   if(control->used == control->free) {
+    curr = control->page_list.blk->next;
+    while(curr->next != NULL) {
+      temp = curr->next;
+      free_page(curr);
+      curr = temp;
+    }
+
+    free_page(curr);
+
+    free_page(page_entry);
+    page_entry = NULL;
   } 
 
 
