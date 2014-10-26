@@ -66,7 +66,9 @@ static kma_page_t *page_entry = NULL;
 
 /**************Implementation***********************************************/
 
-  
+/* smallest unit. used in the begin of each free block. 
+ * to indicate the next same type free block.
+ **/
 struct free_block {
   struct free_block  *next;
 };
@@ -116,6 +118,7 @@ void init_page_entry() {
   control->used = 0;
   control->free = 0;
   
+  /* initial all the struct in the list */
   int i=0;
   for(i=0; i<HEADERSIZE; i++) {
     control->lh[i].size = (int)(pow((double)2,(double) (i+4)));
@@ -135,6 +138,7 @@ void init_page_entry() {
   
 }
 
+/* get controller infomation */
 void *plfl_info() {
   void *ptr;
   ptr = (struct p2fl_controller*)((char*)page_entry->ptr + sizeof(struct page_header));
@@ -142,6 +146,7 @@ void *plfl_info() {
   return ptr;
 }
 
+/* get a new page to store free block */
 void new_free_block(struct list_header *l) {
   struct p2fl_controller *control;
   struct free_block *curr;
@@ -151,7 +156,7 @@ void new_free_block(struct list_header *l) {
 
   control = plfl_info();
 
-
+  /* initial a new page. */
   page = get_page();
   header = (struct page_header*)page->ptr;
   header->page = page;
@@ -159,6 +164,7 @@ void new_free_block(struct list_header *l) {
   curr = (char*)header + sizeof(struct page_header);
   curr->next = NULL;
   
+  /* divide this page into the same size of free block as request. */
   if(l->size == 8192) {
     list_insert(curr, l->blk);
 
@@ -169,9 +175,9 @@ void new_free_block(struct list_header *l) {
       list_insert(curr, l->blk);
       curr = (struct free_block*)((char*)curr + l->size);
     }
-
   }
   
+  /* add this page into page_list */
   curr = (void*)page;
   curr->next = NULL;
   list_insert(curr, control->page_list.blk);
@@ -193,7 +199,6 @@ void *mem_allocate(kma_size_t size) {
         new_free_block(&control->lh[i]);
       }
       ptr = (void*)control->lh[i].blk->next;
-
     
       control->lh[i].blk->next = control->lh[i].blk->next->next;
       
@@ -224,6 +229,7 @@ kma_free(void* ptr, kma_size_t size)
 
   control = plfl_info();
 
+  /* free specific memory and re-add it to original list */
   for(i=0; i<HEADERSIZE; i++) {
     if(size <= control->lh[i].avai_size ) {
       curr = ptr;
@@ -235,6 +241,7 @@ kma_free(void* ptr, kma_size_t size)
 
   control->free++;
 
+  /* free all the page when request memory number = free memory number. */
   if(control->used == control->free) {
     curr = control->page_list.blk->next;
     while(curr->next != NULL) {
