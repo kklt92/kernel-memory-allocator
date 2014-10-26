@@ -107,7 +107,6 @@ void list_insert(struct free_block *block, struct free_block  *l) {
 void init_page_entry() {
   struct page_header *header;
   struct p2fl_controller *control;
-  struct list_header *curr;
   struct free_block *temp;
   page_entry = get_page();
 
@@ -161,8 +160,8 @@ void new_free_block(struct list_header *l) {
   header = (struct page_header*)page->ptr;
   header->page = page;
   page_end_addr = (char*)header + PAGESIZE;
-  curr = (char*)header + sizeof(struct page_header);
-  curr->next = NULL;
+  curr = (struct free_block *)(char*)header + sizeof(struct page_header);
+  curr->next = (struct free_block *)NULL;
   
   /* divide this page into the same size of free block as request. */
   if(l->size == 8192) {
@@ -207,12 +206,15 @@ void *mem_allocate(kma_size_t size) {
 
     }
   }
+  return NULL;
 }
 
 
 void*
 kma_malloc(kma_size_t size)
 {
+  if(size >= PAGESIZE)
+    return NULL;
   if(page_entry == NULL)
     init_page_entry();
 
@@ -223,7 +225,6 @@ void
 kma_free(void* ptr, kma_size_t size)
 {
   struct p2fl_controller *control;
-  struct page_header *header;
   struct free_block *curr, *temp;
   int i=0;
 
@@ -246,11 +247,11 @@ kma_free(void* ptr, kma_size_t size)
     curr = control->page_list.blk->next;
     while(curr->next != NULL) {
       temp = curr->next;
-      free_page(curr);
+      free_page((kma_page_t*)curr);
       curr = temp;
     }
 
-    free_page(curr);
+    free_page((kma_page_t*)curr);
 
     free_page(page_entry);
     page_entry = NULL;
