@@ -88,10 +88,17 @@ struct list_header {
   struct free_block *blk;
 };
 
+struct advance_page {
+  int id;
+  void* ptr;
+  int size;
+  void* addr;
+};
+
 struct mck2_controller {
   int used;
   int free;
-  kma_page_t *add_kmem_page[10];
+  struct advance_page add_kmem_page[10];
   struct list_header freelistarr[HEADERSIZE];
   struct kmem_page_header kmemsizes[KMPAGESIZE];
 };
@@ -112,8 +119,12 @@ void init_page_entry() {
   control->used = 0;
   control->free = 0;
   
-  for(i=0; i<KMPAGESIZE; i=i+PAGESIZE/sizeof(struct kmem_page_header)) {
+  for(i=0; i<KMPAGESIZE/(PAGESIZE/sizeof(struct kmem_page_header)); i++) {
       tempPage = get_page();
+      control->add_kmem_page[i].id = tempPage->id;
+      control->add_kmem_page[i].ptr = tempPage->ptr;
+      control->add_kmem_page[i].size = tempPage->size;
+      control->add_kmem_page[i].addr = (void*)tempPage;
   }
   /* initial all the struct in the list */
   for(i=0; i<HEADERSIZE; i++) {
@@ -259,10 +270,10 @@ kma_free(void* ptr, kma_size_t size)
       }
     }
     i = 0;
-//    for(i=0; i<KMPAGESIZE; i=i+PAGESIZE/sizeof(struct kmem_page_header)) {
-//      tempPage = (control->add_kmem_page[i]);
-//      free_page(tempPage);
-//    } 
+    for(i=0; i<KMPAGESIZE/(PAGESIZE/sizeof(struct kmem_page_header)); i++) {
+      tempPage = (kma_page_t*)control->add_kmem_page[i].addr;
+      free_page(tempPage);
+    } 
     free_page(page_entry);
   
     page_entry = NULL;
