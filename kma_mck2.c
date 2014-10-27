@@ -35,9 +35,16 @@
 #ifdef KMA_MCK2
 #define __KMA_IMPL__
 
+
+
+#define HEADERSIZE 10
+#define MINBLKSIZE 16
+#define MINBLK 4
+#define KMPAGESIZE 2500
 /************System include***********************************************/
 #include <assert.h>
 #include <stdlib.h>
+#include <math.h>
 
 /************Private include**********************************************/
 #include "kma_page.h"
@@ -52,22 +59,215 @@
 
 /************Global Variables*********************************************/
 
+static kma_page_t *page_entry = NULL;
+
 /************Function Prototypes******************************************/
 
 /************External Declaration*****************************************/
 
 /**************Implementation***********************************************/
 
+/* smallest unit. used in the begin of each free block. 
+ * to indicate the next same type free block.
+ **/
+struct free_block {
+  struct free_block  *next;
+};
+
+struct page_header {
+  kma_page_t *page;
+};
+
+struct kmem_page_header {
+  kma_page_t *page;
+  int size;
+};
+
+struct list_header {
+  int size;
+  struct free_block *blk;
+};
+
+struct mck2_controller {
+  int used;
+  int free;
+  kma_page_t *add_kmem_page[10];
+  struct list_header freelistarr[HEADERSIZE];
+  struct kmem_page_header kmemsizes[KMPAGESIZE];
+};
+
+
+void init_page_entry() {
+  struct page_header *header;
+  struct mck2_controller *control;
+  struct free_block *temp;
+  kma_page_t *tempPage;
+  int i=0;
+  page_entry = get_page();
+
+  header = (struct page_header*)page_entry->ptr;
+  control = (struct mck2_controller*)((char*)page_entry->ptr + sizeof(struct page_header));
+
+  header->page = page_entry;
+  control->used = 0;
+  control->free = 0;
+  
+  for(i=0; i<KMPAGESIZE; i=i+PAGESIZE/sizeof(struct kmem_page_header)) {
+      tempPage = get_page();
+  }
+  /* initial all the struct in the list */
+  for(i=0; i<HEADERSIZE; i++) {
+    control->freelistarr[i].size = (int)(pow((double)2,(double) (i+4)));
+    temp = (struct free_block*)((char*)page_entry->ptr + sizeof(struct page_header) 
+        + sizeof(struct mck2_controller) + i * (sizeof(struct free_block)));
+    control->freelistarr[i].blk = temp;
+    control->freelistarr[i].blk->next = NULL;
+  }
+  
+  /* initial kmemsize[]. size = 0 means unallocated. */
+  for(i=0; i<KMPAGESIZE; i++) {
+    control->kmemsizes[i].size = 0;
+    control->kmemsizes[i].page = NULL;
+  }
+  
+}
+
+
+/* get controller infomation */
+void *mck2_info() {
+  void *ptr;
+  ptr = (struct mck2_controller*)((char*)page_entry->ptr + sizeof(struct page_header));
+
+  return ptr;
+}
+
+
+
+/* get a new page to store free block */
+void new_free_block(struct list_header *l) {
+  struct mck2_controller *control;
+  struct free_block *curr;
+  kma_page_t *page;
+  void *page_end_addr;
+
+  control = mck2_info();
+
+  /* initial a new page. */
+  page = get_page();
+  int i=0;
+  for(i=0; i<KMPAGESIZE; i++) {
+    if(control->kmemsizes[i].size == 0) {
+      control->kmemsizes[i].page = page;
+      control->kmemsizes[i].size = l->size;
+      break;
+    }
+  }
+  page_end_addr = (char*)(control->kmemsizes[i].page->ptr) + PAGESIZE;
+  curr = (struct free_block *)(char*)(control->kmemsizes[i].page->ptr);
+  curr->next = (struct free_block *)NULL;
+  
+  /* divide this page into the same size of free block as request. */
+  if(l->size == 8192) {
+    list_insert(curr, l->blk);
+
+  }
+  else {
+    while((char*)curr + l->size < (char*)page_end_addr) {
+      curr->next = NULL;
+      list_insert(curr, l->blk);
+      curr = (struct free_block*)((char*)curr + l->size);
+    }
+  }
+  
+}
+
+void list_insert(struct free_block *block, struct free_block  *l) {
+  if(l->next == NULL) {
+    l->next = block;
+  }
+  else {
+    block->next = l->next;
+    l->next = block;
+  }
+}
+
+void *mem_allocate(kma_size_t size) {
+  struct mck2_controller *control;
+  void *ptr;
+  int  i=0;
+  
+  control = mck2_info();
+
+  for(i = 0; i<HEADERSIZE; i++) {
+    if(size <= control->freelistarr[i].size) {
+      if(control->freelistarr[i].blk->next == NULL) {
+        new_free_block(&control->freelistarr[i]);
+      }
+      ptr = (void*)control->freelistarr[i].blk->next;
+    
+      control->freelistarr[i].blk->next = control->freelistarr[i].blk->next->next;
+      
+      control->used++;
+      return ptr;
+
+    }
+  }
+  return NULL;
+}
+
+
 void*
 kma_malloc(kma_size_t size)
 {
-  return NULL;
+  if(size >= PAGESIZE) 
+    return NULL;
+  if(page_entry == NULL)
+    init_page_entry();
+
+
+  return mem_allocate(size);
 }
 
 void
 kma_free(void* ptr, kma_size_t size)
 {
-  ;
+  
+  struct mck2_controller *control;
+  struct free_block *curr ;
+  kma_page_t *tempPage;
+  int i=0;
+
+  control = mck2_info();
+
+  /* free specific memory and re-add it to original list */
+  for(i=0; i<HEADERSIZE; i++) {
+    if(size <= control->freelistarr[i].size ) {
+      curr = ptr;
+      curr->next = NULL;
+      list_insert(curr, (control->freelistarr[i].blk));
+      break;
+    }
+  }
+
+  control->free++;
+
+  /* free all the page when request memory number = free memory number. */
+  if(control->used == control->free) {
+    for(i=0; i<KMPAGESIZE; i++) {
+      if(control->kmemsizes[i].size != 0) {
+        free_page(control->kmemsizes[i].page);
+      }
+    }
+    i = 0;
+//    for(i=0; i<KMPAGESIZE; i=i+PAGESIZE/sizeof(struct kmem_page_header)) {
+//      tempPage = (control->add_kmem_page[i]);
+//      free_page(tempPage);
+//    } 
+    free_page(page_entry);
+  
+    page_entry = NULL;
+  } 
+
 }
 
 #endif // KMA_MCK2
