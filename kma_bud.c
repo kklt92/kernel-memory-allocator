@@ -34,6 +34,10 @@
 #ifdef KMA_BUD
 #define __KMA_IMPL__
 
+/* minimal free block size is 32. */
+#define MIN_BLK_SIZE 32
+#define HEADERSIZE 9
+#define FREE_PAGE -1
 /************System include***********************************************/
 #include <assert.h>
 #include <stdlib.h>
@@ -41,10 +45,6 @@
 /************Private include**********************************************/
 #include "kma_page.h"
 #include "kma.h"
-
-#define MIN_BLK_SIZE 32
-#define HEADERSIZE 9
-
 
 /************Defines and Typedefs*****************************************/
 /*  #defines and typedefs should have their names in all caps.
@@ -83,6 +83,7 @@ struct page_node {
   void* ptr;
   int size;
   void* addr;
+  struct page_node *prev;
   struct page_node *next;
 };
   
@@ -144,7 +145,12 @@ void list_blk_insert(struct free_block *block, struct free_block  *l) {
 }
 
 void node_list_append(struct page_node *newNode, struct page_node *list) {
-  if(
+  newNode->prev = list->prev;
+  newNode->next = list;
+  list_prev = newNode;
+  newNode->prev->next = newNode;
+  
+}
 
 
 /* get controller infomation */
@@ -191,20 +197,22 @@ void init_page_entry() {
   control->page_list.id = temp;
   control->page_list.addr = NULL;    
   control->page_list.ptr = NULL;
-  control->page_list.next = NULL;
+  control->page_list.prev = &(control->page_list);
+  control->page_list.next = &(control->page_list);
 
   currNode = (struct page_node)((char*)temp + sizeof(struct free_block));
-  control->page_list.next = currNode;
-  currNode = (struct page_node)((char*)currNode + sizeof(struct page_node));
-  while((char*)curr + sizeof(struct page_node) <= page_end_addr) {
-    currNode
+  while(currNode + 1 <= page_end_addr) {
+    currNode->size = FREE_PAGE;
+    node_list_append(currNode, &(control->page_list));
+    currNode++;
+  }
 
 }
 
 
 /* get a new page to store free block */
 void new_free_block(struct list_header *l) {
-  struct p2fl_controller *control;
+  struct bud_controller *control;
   struct free_block *curr;
   struct page_header *header;
   kma_page_t *page;
@@ -241,6 +249,19 @@ void new_free_block(struct list_header *l) {
   
 
 }
+
+void new_free_page() {
+  struct bud_controller *control;
+  struct page_node *currNode;
+  kma_page_t *page;
+
+  control = bud_info();
+  
+  page = get_page();
+
+  controlr->page_list.next;
+}
+
 
 
 void*
