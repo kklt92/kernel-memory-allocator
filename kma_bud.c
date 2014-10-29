@@ -175,6 +175,11 @@ void node_list_append(struct page_node *newNode, struct page_node *prevNode) {
   
 }
 
+void blk_remove(struct free_block *block, struct free_block *prevBlk) {
+  prevBlk->next = block->next;
+  block->next = NULL;
+}
+
 
 /* get controller infomation */
 void *bud_info() {
@@ -340,7 +345,7 @@ void resize_block(kma_size_t reqSize, void *ptr, int blkSize) {
     }
   }
 
-  for(i=0; i<reqSize/MIN_BLK_SIZE; i++) {
+  for(i=0; i<=(reqSize-1)/MIN_BLK_SIZE; i++) {
     set_bit(curr->node->bitmap, i+offset);
   }
 }
@@ -365,7 +370,6 @@ void *allocate_mem(kma_size_t size) {
       else {
         ptr = (void*)control->freelist[i].blk->next;
         control->freelist[i].blk->next = control->freelist[i].blk->next->next;
-        control->used++;
         resize_block(size, ptr, control->freelist[i].size);
         return ptr;
       }
@@ -379,15 +383,37 @@ void *allocate_mem(kma_size_t size) {
 }
 
 void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
+  struct bud_controller *control;
+  struct free_block *blk, *prevBlk;
+
   int offset;
   int blkOffset;
   int remainder;
+  void* prime_ptr;
   int free = 1;
+  int i=0;
+  int p=0;
+
+
+  control = bud_info();
   
   offset = ((char*)ptr - (char*)currNode->ptr)/MIN_BLK_SIZE;
   blkOffset = blkSize / MIN_BLK_SIZE;
 
   remainder = offset % (2 * blkOffset);
+
+  for(p=0;p<HEADERSIZE; p++) {
+    if(control->freelist[p].size == blkSize) {
+      break;
+    }
+  }
+
+  if(blkSize == PAGESIZE) {
+    make_free_block(ptr, currNode);
+    list_blk_insert(ptr, control->freelist[p].blk);
+    reset_bitmap(currNode->bitmap);
+    return ;
+  }
   
   if(remainder == 0) {
     for(i=0;i<blkOffset;i++) {
@@ -397,17 +423,60 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
       }
     }
     if(free == 1) {
-     //TODO 
-    }   
+      prime_ptr = (void*)((char*)ptr + blkSize);
+      blk = control->freelist[p].blk->next;
+      prevBlk = control->freelist[p].blk;
+      while(blk  != NULL) {
+        if(control->freelist[p].blk == prime_ptr) {
+          blk_remove(blk, prevBlk);
+          break;
+        }
+        prevBlk = blk;
+        blk = blk->next;
+      }
 
+      blkSize = 2 * blkSize;
+      return coalescing(ptr, blkSize, currNode);
+        
+    }
+    else if(free == 0) {
+      blk = make_free_block(ptr, currNode);
+      list_blk_insert(blk, control->freelist[p].blk);
+    } 
   }
   else if(remainder == blkOffset) {
+    for(i=0; i<blkOffset;i++) {
+      if(get_bit(currNode->bitmap, i-blkOffset) == 1) {
+        free = 0;
+        break;
+      }
+    }
+    if(free == 1) {
+      prime_ptr = (void*)((char*)ptr - blkSize);
+      blk = control->freelist[p].blk->next;
+      prevBlk = control->freelist[p].blk;
+      while(blk != NULL) {
+        if(control->freelist[p].blk == prime_ptr) {
+          blk_remove(blk,prevBlk);
+          break;
+        }
+        prevBlk = blk;
+        blk = blk->next;
+      }
+      blkSize = 2 * blkSize;
+      return coalescing(prime_ptr, blkSize, currNode);
+
+    }
+    else if(free == 0) {
+      blk = make_free_block(ptr, currNode);
+      list_blk_insert(blk, control->freelist[p].blk);
+    }
   }
+ 
   else {
     printf("Error in coalescing\n");
   }
 
-  return coalescing()
 }
 
   
@@ -428,12 +497,16 @@ kma_free(void* ptr, kma_size_t size)
 {
   struct bud_controller *control;
   struct free_block *curr;
-  struct page_node *currNode;
+  struct page_node *currNode ;
   void *page_begin_addr;
+  int offset;
   kma_page_t *tempPage;
   int i=0;
+  int j=0;
 
   control = bud_info();
+
+  
 
   for(i=0; i<HEADERSIZE; i++) {
     if(size <= control->freelist[i].size) {
@@ -445,12 +518,26 @@ kma_free(void* ptr, kma_size_t size)
         currNode = currNode->next;
       }
       curr->node = currNode;
+      offset = ((char*)ptr - (char*)currNode->ptr) / MIN_BLK_SIZE;
+      for(j=0; j<= (size-1)/MIN_BLK_SIZE; j++) {
+        clear_bit(currNode->bitmap, j+offset);
+      }
       coalescing(ptr, control->freelist[i].size, currNode);
       break;
     }
   }
 
   control->free++;
+
+  if(control->free == control->used) {
+    
+    while(currNode != control->page_list.prev) {
+      free_page(currNode->ptr);
+      currNode = currNode->next;
+    }
+    free_page(currNode->ptr);
+  }
+
 
 
   
