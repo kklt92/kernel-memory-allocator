@@ -38,6 +38,7 @@
 #define MIN_BLK_SIZE 32
 #define HEADERSIZE 9
 #define FREE_PAGE -1
+#define MAPSIZE (PAGESIZE/MIN_BLK_SIZE)/(sizeof(int)*8)
 /************System include***********************************************/
 #include <assert.h>
 #include <stdlib.h>
@@ -65,6 +66,7 @@ static kma_page_t *page_entry = NULL;
 
 struct free_block {
   struct free_block  *next;
+  struct page_node   *node;    // point back to page node to access bit map.
 };
 
 struct page_header {
@@ -91,10 +93,24 @@ struct page_node {
 struct bud_controller {
   int used;
   int free;
-  struct page_node node_page_list;
+  void* node_list_page[15];
   struct list_header freelist[HEADERSIZE];
   struct page_node page_list;
 };
+
+struct free_block *make_free_block(void *ptr, struct page_node *pnode) {
+  struct free_block *blk;
+
+  blk = (struct free_block*)ptr;
+  blk->next = NULL;
+  blk->node = pnode;
+
+  return blk;
+}
+
+void *current_page_begin_addr(void *addr) {
+  return (void*)((unsigned long)addr & ~((unsigned long)(PAGESIZE-1)));
+}
 
 /* function for bit map */
 void set_bit(int A[], int k) {
@@ -133,6 +149,14 @@ int get_bit(int A[], int k) {
     return 0;
 }
 
+void reset_bitmap(int A[]) {
+  int i;
+
+  for(i=0; i<MAPSIZE; i++) {
+    A[i] = 0;
+  }
+}
+
 
 void list_blk_insert(struct free_block *block, struct free_block  *l) {
   if(l->next == NULL) {
@@ -144,11 +168,10 @@ void list_blk_insert(struct free_block *block, struct free_block  *l) {
   }
 }
 
-void node_list_append(struct page_node *newNode, struct page_node *list) {
-  newNode->prev = list->prev;
-  newNode->next = list;
-  list_prev = newNode;
-  newNode->prev->next = newNode;
+void node_list_append(struct page_node *newNode, struct page_node *prevNode) {
+  newNode->prev = prevNode;
+  newNode->next = NULL;
+  prevNode->next = newNode;
   
 }
 
@@ -167,7 +190,7 @@ void init_page_entry() {
   struct bud_controller *control;
   struct free_block *temp;
   void *page_end_addr;
-  struct page_node *currNode;
+  struct page_node *currNode, *prevNode;
   page_entry = get_page();
 
   header = (struct page_header*)page_entry->ptr;
@@ -186,11 +209,17 @@ void init_page_entry() {
         + sizeof(struct bud_controller) + i * (sizeof(struct free_block)));
     control->freelist[i].blk = temp;
     control->freelist[i].blk->next = NULL;
+    control->freelist[i].blk->node = NULL;
+  }
+
+
+  for(i=0; i<15;i++) {
+    control->node_list_page[i] = NULL;
   }
 
   
   for(i=0; i<(PAGESIZE/MIN_BLK_SIZE)/(sizeof(int)*8); i++) {
-    control->page_list.bitmap[i] = 0
+    control->page_list.bitmap[i] = 0;
   }
     
   control->page_list.size = 0;
@@ -200,80 +229,232 @@ void init_page_entry() {
   control->page_list.prev = &(control->page_list);
   control->page_list.next = &(control->page_list);
 
-  currNode = (struct page_node)((char*)temp + sizeof(struct free_block));
+  currNode = (struct page_node*)((char*)temp + sizeof(struct free_block));
+
+  prevNode = &(control->page_list);
   while(currNode + 1 <= page_end_addr) {
     currNode->size = FREE_PAGE;
-    node_list_append(currNode, &(control->page_list));
+    node_list_append(currNode, prevNode);
+    prevNode = currNode;
     currNode++;
   }
+  prevNode->next =  NULL;
 
 }
 
-
-/* get a new page to store free block */
-void new_free_block(struct list_header *l) {
+/***
+ * set a new node page when every node in page_list is used.
+ **/
+void set_new_node_page() {
   struct bud_controller *control;
-  struct free_block *curr;
+  struct page_node *currNode, *prevNode, *page_end_addr;
   struct page_header *header;
   kma_page_t *page;
-  void *page_end_addr;
 
-  control = plfl_info();
-
-  /* initial a new page. */
+  control = bud_info();
   page = get_page();
-  header = (struct page_header*)page->ptr;
-  header->page = page;
-  page_end_addr = (char*)page->ptr + PAGESIZE;
-  curr = (struct free_block *)(char*)header + sizeof(struct page_header);
-  curr->next = (struct free_block *)NULL;
-  
-  /* divide this page into the same size of free block as request. */
-  if(l->size == 8192) {
-    list_insert(curr, l->blk);
 
+  header = (struct page_header*) page->ptr;
+  header->page = page;
+
+  currNode = (struct page_node*)((char*)header + sizeof(struct page_header));
+  page_end_addr = (struct page_node*)((char*)header + PAGESIZE);
+
+  prevNode = control->page_list.prev;
+  while(currNode + 1< page_end_addr) {
+    currNode->size = FREE_PAGE;
+    node_list_append(currNode, prevNode);
+    prevNode = currNode;
+    currNode++;
   }
-  else {
-    while((char*)curr + l->size < (char*)page_end_addr) {
-      curr->next = NULL;
-      list_insert(curr, l->blk);
-      curr = (struct free_block*)((char*)curr + l->size);
+  prevNode->next = NULL;
+
+  int i = 0;
+  for(i=0;i<15;i++) {
+    if(control->node_list_page[i] == NULL) {
+      control->node_list_page[i] = (void*)page;
     }
   }
-  
-  /* add this page into page_list */
-  curr = (void*)page;
-  curr->next = NULL;
-  list_insert(curr, control->page_list.blk);
-
-  
-
 }
 
+/**
+ * when there are no free block in the block list
+ * call this function to allocate a new page in the 
+ * page node. and use it to fit the request memory.
+ **/
 void new_free_page() {
   struct bud_controller *control;
-  struct page_node *currNode;
+  struct page_node *currNode, *prevNode;
+  struct free_block *blk;
   kma_page_t *page;
 
   control = bud_info();
   
   page = get_page();
 
-  controlr->page_list.next;
+  prevNode = control->page_list.prev;
+
+  if(prevNode->next == NULL) {
+    set_new_node_page();
+  }
+  currNode = prevNode->next;
+  currNode->addr = page;
+  currNode->ptr = page->ptr;
+  currNode->size = page->size;
+  currNode->id = page->id;
+  reset_bitmap(currNode->bitmap);
+
+  blk = make_free_block(currNode->ptr, currNode);
+
+  /* point page_list.prev to the end of new page_list */
+  control->page_list.prev = currNode;
 }
 
 
+/**
+ * reduce free block size to fit request memory size.
+ * Add extra space to free list array.
+ **/
+void resize_block(kma_size_t reqSize, void *ptr, int blkSize) {
+  struct bud_controller *control;
+  struct free_block *temp, *curr;
+  void *temp_ptr;
+  int offset;
+  int i=0;
+
+  control = bud_info();
+
+  curr = (struct free_block*)ptr;
+
+  offset = ((char*)ptr - (char*)curr->node->ptr)/MIN_BLK_SIZE;
+
+  while(blkSize/reqSize >= 2) {
+    blkSize = blkSize/2;
+    temp_ptr = (void*)((char*)ptr + blkSize);
+    for(i=HEADERSIZE - 1; i > -1; i--) {
+      if(control->freelist[i].size == blkSize) {
+        temp = make_free_block(temp_ptr, curr->node);
+        list_blk_insert(temp, control->freelist[i].blk);
+        break;
+      }
+    }
+  }
+
+  for(i=0; i<reqSize/MIN_BLK_SIZE; i++) {
+    set_bit(curr->node->bitmap, i+offset);
+  }
+}
+
+
+void *allocate_mem(kma_size_t size) {
+  struct page_node *currNode;
+  struct bud_controller *control;
+  void *ptr;
+  kma_page_t *page;
+  int i=0;
+
+  control = bud_info();
+
+  control->used++;
+
+  for(i=0; i<HEADERSIZE; i++) {
+    if(size <= control->freelist[i].size) {
+      if(control->freelist[i].blk->next == NULL) {
+        continue;
+      }
+      else {
+        ptr = (void*)control->freelist[i].blk->next;
+        control->freelist[i].blk->next = control->freelist[i].blk->next->next;
+        control->used++;
+        resize_block(size, ptr, control->freelist[i].size);
+        return ptr;
+      }
+    }
+  }
+  new_free_page();
+  ptr = control->page_list.prev->ptr;
+  resize_block(size, ptr, (int)PAGESIZE);
+
+  return ptr;
+}
+
+void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
+  int offset;
+  int blkOffset;
+  int remainder;
+  int free = 1;
+  
+  offset = ((char*)ptr - (char*)currNode->ptr)/MIN_BLK_SIZE;
+  blkOffset = blkSize / MIN_BLK_SIZE;
+
+  remainder = offset % (2 * blkOffset);
+  
+  if(remainder == 0) {
+    for(i=0;i<blkOffset;i++) {
+      if(get_bit(currNode->bitmap, i+blkOffset) == 1) {
+        free = 0;
+        break;
+      }
+    }
+    if(free == 1) {
+     //TODO 
+    }   
+
+  }
+  else if(remainder == blkOffset) {
+  }
+  else {
+    printf("Error in coalescing\n");
+  }
+
+  return coalescing()
+}
+
+  
 
 void*
 kma_malloc(kma_size_t size)
 {
-  return NULL;
+  if(size > PAGESIZE)
+    return NULL;
+  if(page_entry == NULL)
+    init_page_entry();
+
+  return allocate_mem(size);
 }
 
 void 
 kma_free(void* ptr, kma_size_t size)
 {
-  ;
+  struct bud_controller *control;
+  struct free_block *curr;
+  struct page_node *currNode;
+  void *page_begin_addr;
+  kma_page_t *tempPage;
+  int i=0;
+
+  control = bud_info();
+
+  for(i=0; i<HEADERSIZE; i++) {
+    if(size <= control->freelist[i].size) {
+      curr = ptr;
+      curr->next = NULL;
+      page_begin_addr = current_page_begin_addr(ptr);
+      currNode = control->page_list.next;
+      while(currNode->ptr != page_begin_addr){
+        currNode = currNode->next;
+      }
+      curr->node = currNode;
+      coalescing(ptr, control->freelist[i].size, currNode);
+      break;
+    }
+  }
+
+  control->free++;
+
+
+  
+  
 }
 
 #endif // KMA_BUD
