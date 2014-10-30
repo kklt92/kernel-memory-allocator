@@ -130,7 +130,7 @@ void clear_bit(int A[], int k) {
 
   unsigned int flag = 1;
   flag = flag << pos;
-  flag = -flag;
+  flag = ~flag;
 
   A[i] = A[i] & flag;
 }
@@ -278,6 +278,7 @@ void set_new_node_page() {
   for(i=0;i<15;i++) {
     if(control->node_list_page[i] == NULL) {
       control->node_list_page[i] = (void*)page;
+      break;
     }
   }
 }
@@ -333,19 +334,21 @@ void resize_block(kma_size_t reqSize, void *ptr, int blkSize) {
 
   offset = ((char*)ptr - (char*)curr->node->ptr)/MIN_BLK_SIZE;
 
-  while(blkSize/reqSize >= 2) {
-    blkSize = blkSize/2;
-    temp_ptr = (void*)((char*)ptr + blkSize);
-    for(i=HEADERSIZE - 1; i > -1; i--) {
-      if(control->freelist[i].size == blkSize) {
-        temp = make_free_block(temp_ptr, curr->node);
-        list_blk_insert(temp, control->freelist[i].blk);
-        break;
+  
+    while(blkSize/reqSize >= 2 && blkSize > 32) {
+      blkSize = blkSize/2;
+      temp_ptr = (void*)((char*)ptr + blkSize);
+      for(i=HEADERSIZE - 1; i > -1; i--) {
+        if(control->freelist[i].size == blkSize) {
+          temp = make_free_block(temp_ptr, curr->node);
+          list_blk_insert(temp, control->freelist[i].blk);
+          break;
+        }
       }
-    }
+    
   }
 
-  for(i=0; i<=(reqSize-1)/MIN_BLK_SIZE; i++) {
+  for(i=0; i<blkSize/MIN_BLK_SIZE; i++) {
     set_bit(curr->node->bitmap, i+offset);
   }
 }
@@ -393,6 +396,7 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
   int free = 1;
   int i=0;
   int p=0;
+  int found = 0;
 
 
   control = bud_info();
@@ -417,7 +421,7 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
   
   if(remainder == 0) {
     for(i=0;i<blkOffset;i++) {
-      if(get_bit(currNode->bitmap, i+blkOffset) == 1) {
+      if(get_bit(currNode->bitmap, offset+i+blkOffset) == 1) {
         free = 0;
         break;
       }
@@ -427,12 +431,17 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
       blk = control->freelist[p].blk->next;
       prevBlk = control->freelist[p].blk;
       while(blk  != NULL) {
-        if(control->freelist[p].blk == prime_ptr) {
+        if(blk == prime_ptr) {
+          found = 1;
           blk_remove(blk, prevBlk);
           break;
         }
         prevBlk = blk;
         blk = blk->next;
+      }
+      if(found == 0) {
+        printf("error, coalescing is error, ptr: %x, blkSize: %d, currNode: %x\n",
+           *(int*)prime_ptr, blkSize, *(int*)currNode);
       }
 
       blkSize = 2 * blkSize;
@@ -446,7 +455,7 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
   }
   else if(remainder == blkOffset) {
     for(i=0; i<blkOffset;i++) {
-      if(get_bit(currNode->bitmap, i-blkOffset) == 1) {
+      if(get_bit(currNode->bitmap, offset+i-blkOffset) == 1) {
         free = 0;
         break;
       }
@@ -456,12 +465,17 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
       blk = control->freelist[p].blk->next;
       prevBlk = control->freelist[p].blk;
       while(blk != NULL) {
-        if(control->freelist[p].blk == prime_ptr) {
+        if(blk == prime_ptr) {
+          found = 1;
           blk_remove(blk,prevBlk);
           break;
         }
         prevBlk = blk;
         blk = blk->next;
+      }
+      if(found == 0) {
+        printf("error, coalescing is error, ptr: %x, blkSize: %d, currNode: %x\n",
+           * (int*)prime_ptr, blkSize, *(int*)currNode);
       }
       blkSize = 2 * blkSize;
       return coalescing(prime_ptr, blkSize, currNode);
@@ -506,8 +520,6 @@ kma_free(void* ptr, kma_size_t size)
 
   control = bud_info();
 
-  
-
   for(i=0; i<HEADERSIZE; i++) {
     if(size <= control->freelist[i].size) {
       curr = ptr;
@@ -519,7 +531,7 @@ kma_free(void* ptr, kma_size_t size)
       }
       curr->node = currNode;
       offset = ((char*)ptr - (char*)currNode->ptr) / MIN_BLK_SIZE;
-      for(j=0; j<= (size-1)/MIN_BLK_SIZE; j++) {
+      for(j=0; j< control->freelist[i].size/MIN_BLK_SIZE; j++) {
         clear_bit(currNode->bitmap, j+offset);
       }
       coalescing(ptr, control->freelist[i].size, currNode);
@@ -530,12 +542,21 @@ kma_free(void* ptr, kma_size_t size)
   control->free++;
 
   if(control->free == control->used) {
+    currNode = control->page_list.next;
     
     while(currNode != control->page_list.prev) {
-      free_page(currNode->ptr);
+      free_page(currNode->addr);
       currNode = currNode->next;
     }
-    free_page(currNode->ptr);
+    free_page(currNode->addr);
+
+    for(i=0; i<15; i++) {
+      if(control->node_list_page[i] != NULL) {
+        free_page(control->node_list_page[i]);
+      }
+    }
+    free_page(page_entry);
+    page_entry = NULL;
   }
 
 
