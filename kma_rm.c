@@ -57,6 +57,7 @@ static kma_page_t *page_entry = NULL;
 /************Function Prototypes******************************************/
 
 void *allocate_mem(kma_size_t);
+void newPage_of_node(); 
 
 /************External Declaration*****************************************/
 
@@ -206,7 +207,7 @@ void newPage_of_node() {
 
 
 void *allocate_mem(kma_size_t size) {
-  struct node *curr, *node;
+  struct node *curr;
   kma_page_t *page;
   struct page_header *header;
   struct rm_controller *rm = rm_info();
@@ -277,7 +278,7 @@ kma_free(void* ptr, kma_size_t size)
   struct node *curr, *node;
   struct page_header *header;
   void* end_addr;
-  kma_page_t pageFree[1000];
+//  kma_page_t pageFree[1000];
   int combine = 0;
   
   rm = rm_info();
