@@ -63,6 +63,7 @@ static kma_page_t *page_entry = NULL;
 
 /************Function Prototypes******************************************/
 
+void list_insert(struct free_block *, struct free_block  *);
 /************External Declaration*****************************************/
 
 /**************Implementation***********************************************/
