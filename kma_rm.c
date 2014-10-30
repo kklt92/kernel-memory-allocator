@@ -284,6 +284,7 @@ kma_free(void* ptr, kma_size_t size)
   rm = rm_info();
 
   end_addr = (void*)((char*)ptr + size);
+  node = NULL;
 
   // TODO verify the ptr and size validation.
   
