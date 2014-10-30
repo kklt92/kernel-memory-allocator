@@ -314,6 +314,7 @@ void new_free_page() {
 
   blk = make_free_block(currNode->ptr, currNode);
 
+  if(blk == 0);
   /* point page_list.prev to the end of new page_list */
   control->page_list.prev = currNode;
 }
