@@ -63,7 +63,6 @@ static kma_page_t *page_entry = NULL;
 
 /************Function Prototypes******************************************/
 
-void list_insert(struct free_block*, struct free_block*);
 /************External Declaration*****************************************/
 
 /**************Implementation***********************************************/
@@ -104,6 +103,16 @@ struct mck2_controller {
   struct kmem_page_header kmemsizes[KMPAGESIZE];
 };
 
+
+void list_insert(struct free_block *block, struct free_block  *l) {
+  if(l->next == NULL) {
+    l->next = block;
+  }
+  else {
+    block->next = l->next;
+    l->next = block;
+  }
+}
 
 void init_page_entry() {
   struct page_header *header;
@@ -193,15 +202,6 @@ void new_free_block(struct list_header *l) {
   
 }
 
-void list_insert(struct free_block *block, struct free_block  *l) {
-  if(l->next == NULL) {
-    l->next = block;
-  }
-  else {
-    block->next = l->next;
-    l->next = block;
-  }
-}
 
 void *mem_allocate(kma_size_t size) {
   struct mck2_controller *control;
