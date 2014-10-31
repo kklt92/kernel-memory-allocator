@@ -104,6 +104,16 @@ struct mck2_controller {
 };
 
 
+void list_insert(struct free_block *block, struct free_block  *l) {
+  if(l->next == NULL) {
+    l->next = block;
+  }
+  else {
+    block->next = l->next;
+    l->next = block;
+  }
+}
+
 void init_page_entry() {
   struct page_header *header;
   struct mck2_controller *control;
@@ -192,15 +202,6 @@ void new_free_block(struct list_header *l) {
   
 }
 
-void list_insert(struct free_block *block, struct free_block  *l) {
-  if(l->next == NULL) {
-    l->next = block;
-  }
-  else {
-    block->next = l->next;
-    l->next = block;
-  }
-}
 
 void *mem_allocate(kma_size_t size) {
   struct mck2_controller *control;

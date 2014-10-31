@@ -22,7 +22,7 @@ TEAM = "wml431+whw437"
 VERSION = `date +%Y%m%d%H%M%S`
 PROJ = kma
 
-COMPETITION = KMA_P2FL
+COMPETITION = KMA_MCK2
 
 CC = gcc
 MV = mv
@@ -31,7 +31,7 @@ RM = rm
 MKDIR = mkdir
 TAR = tar cvf
 COMPRESS = gzip
-CFLAGS = -g -Wall -O0 -D HAVE_CONFIG_H -lm
+CFLAGS = -g -Wall -O2 -D HAVE_CONFIG_H -lm
 
 DELIVERY = Makefile *.h *.c DOC
 PROGS = kma_dummy kma_rm kma_p2fl kma_mck2 kma_bud kma_lzbud

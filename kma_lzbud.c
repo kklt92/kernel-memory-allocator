@@ -35,9 +35,17 @@
 #ifdef KMA_LZBUD
 #define __KMA_IMPL__
 
+
+/* minimal free block size is 32. */
+#define MIN_BLK_SIZE 32
+#define HEADERSIZE 9
+#define FREE_PAGE -1
+#define MAPSIZE (PAGESIZE/MIN_BLK_SIZE)/(sizeof(int)*8)
 /************System include***********************************************/
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
 
 /************Private include**********************************************/
 #include "kma_page.h"
@@ -52,22 +60,567 @@
 
 /************Global Variables*********************************************/
 
-/************Function Prototypes******************************************/
+static kma_page_t *page_entry = NULL;
 
+/************Function Prototypes******************************************/
+	
 /************External Declaration*****************************************/
 
 /**************Implementation***********************************************/
 
+struct free_block {
+  struct free_block  *next;
+  struct page_node   *node;    // point back to page node to access bit map.
+};
+
+struct page_header {
+  kma_page_t *page;
+};
+
+
+struct list_header {
+  int size;
+  int weight;
+  struct free_block *blk;
+};
+
+struct page_node {
+  int bitmap[(PAGESIZE/MIN_BLK_SIZE)/(sizeof(int)*8)];
+  int id;
+  void* ptr;
+  int size;
+  void* addr;
+  struct page_node *prev;
+  struct page_node *next;
+};
+  
+
+struct bud_controller {
+  int used;
+  int free;
+  void* node_list_page[15];
+  struct list_header freelist[HEADERSIZE];
+  struct page_node page_list;
+};
+
+struct free_block *make_free_block(void *ptr, struct page_node *pnode) {
+  struct free_block *blk;
+
+  blk = (struct free_block*)ptr;
+  blk->next = NULL;
+  blk->node = pnode;
+
+  return blk;
+}
+
+void *current_page_begin_addr(void *addr) {
+  return (void*)((unsigned long)addr & ~((unsigned long)(PAGESIZE-1)));
+}
+
+/* function for bit map */
+void set_bit(int A[], int k) {
+  int i = k/(sizeof(int)*8);
+  int pos = k%(sizeof(int)*8);
+
+  unsigned int flag = 1;
+
+  flag = flag << pos;
+
+  A[i] = A[i] | flag;
+}
+
+void clear_bit(int A[], int k) {
+  int i = k/(sizeof(int)*8);
+  int pos = k%(sizeof(int)*8);
+
+  unsigned int flag = 1;
+  flag = flag << pos;
+  flag = ~flag;
+
+  A[i] = A[i] & flag;
+}
+
+int get_bit(int A[], int k) {
+  int i = k/(sizeof(int)*8);
+  int pos = k%(sizeof(int)*8);
+
+  unsigned int flag = 1;
+
+  flag = flag << pos;
+
+  if(A[i] & flag)
+    return 1;
+  else
+    return 0;
+}
+
+void reset_bitmap(int A[]) {
+  int i;
+
+  for(i=0; i<MAPSIZE; i++) {
+    A[i] = 0;
+  }
+}
+
+int get_blk_bit(struct free_block *blk) {
+  int k;
+
+  k = ((char*)blk - (char*)(current_page_begin_addr((void*)blk))) / MIN_BLK_SIZE;
+
+  return get_bit(blk->node->bitmap, k);
+}
+
+
+
+
+void list_blk_insert(struct free_block *block, struct free_block  *l) {
+  if(l->next == NULL) {
+    l->next = block;
+  }
+  else {
+    block->next = l->next;
+    l->next = block;
+  }
+}
+
+void node_list_append(struct page_node *newNode, struct page_node *prevNode) {
+  newNode->prev = prevNode;
+  newNode->next = NULL;
+  prevNode->next = newNode;
+  
+}
+
+void blk_remove(struct free_block *block, struct free_block *prevBlk) {
+  prevBlk->next = block->next;
+  block->next = NULL;
+}
+
+
+/* get controller infomation */
+void *bud_info() {
+  void *ptr;
+  ptr = (struct bud_controller*)((char*)page_entry->ptr + sizeof(struct page_header));
+
+  return ptr;
+}
+
+
+void init_page_entry() {
+  struct page_header *header;
+  struct bud_controller *control;
+  struct free_block *temp;
+  void *page_end_addr;
+  struct page_node *currNode, *prevNode;
+  page_entry = get_page();
+
+  header = (struct page_header*)page_entry->ptr;
+  control = (struct bud_controller*)((char*)page_entry->ptr + sizeof(struct page_header));
+  page_end_addr = (void*)((char*)page_entry->ptr + PAGESIZE);
+
+  header->page = page_entry;
+  control->used = 0;
+  control->free = 0;
+  
+  /* initial all the struct in the list */
+  int i=0;
+  for(i=0; i<HEADERSIZE; i++) {
+    control->freelist[i].size = (int)(pow((double)2,(double) (i+5)));
+    control->freelist[i].weight = 0;
+    temp = (struct free_block*)((char*)page_entry->ptr + sizeof(struct page_header) 
+        + sizeof(struct bud_controller) + i * (sizeof(struct free_block)));
+    control->freelist[i].blk = temp;
+    control->freelist[i].blk->next = NULL;
+    control->freelist[i].blk->node = NULL;
+  }
+
+
+  for(i=0; i<15;i++) {
+    control->node_list_page[i] = NULL;
+  }
+
+  
+  for(i=0; i<(PAGESIZE/MIN_BLK_SIZE)/(sizeof(int)*8); i++) {
+    control->page_list.bitmap[i] = 0;
+  }
+    
+  control->page_list.size = 0;
+  control->page_list.id = 0;
+  control->page_list.addr = NULL;    
+  control->page_list.ptr = NULL;
+  control->page_list.prev = &(control->page_list);
+  control->page_list.next = &(control->page_list);
+
+  currNode = (struct page_node*)((char*)temp + sizeof(struct free_block));
+
+  prevNode = &(control->page_list);
+  while(currNode + 1 <= (struct page_node*)page_end_addr) {
+    currNode->size = FREE_PAGE;
+    node_list_append(currNode, prevNode);
+    prevNode = currNode;
+    currNode++;
+  }
+  prevNode->next =  NULL;
+
+}
+
+/***
+ * set a new node page when every node in page_list is used.
+ **/
+void set_new_node_page() {
+  struct bud_controller *control;
+  struct page_node *currNode, *prevNode, *page_end_addr;
+  struct page_header *header;
+  kma_page_t *page;
+
+  control = bud_info();
+  page = get_page();
+
+  header = (struct page_header*) page->ptr;
+  header->page = page;
+
+  currNode = (struct page_node*)((char*)header + sizeof(struct page_header));
+  page_end_addr = (struct page_node*)((char*)header + PAGESIZE);
+
+  prevNode = control->page_list.prev;
+  while(currNode + 1< page_end_addr) {
+    currNode->size = FREE_PAGE;
+    node_list_append(currNode, prevNode);
+    prevNode = currNode;
+    currNode++;
+  }
+  prevNode->next = NULL;
+
+  int i = 0;
+  for(i=0;i<15;i++) {
+    if(control->node_list_page[i] == NULL) {
+      control->node_list_page[i] = (void*)page;
+      break;
+    }
+  }
+}
+
+/**
+ * when there are no free block in the block list
+ * call this function to allocate a new page in the 
+ * page node. and use it to fit the request memory.
+ **/
+void new_free_page() {
+  struct bud_controller *control;
+  struct page_node *currNode, *prevNode;
+  struct free_block *blk;
+  kma_page_t *page;
+
+  control = bud_info();
+  
+  page = get_page();
+
+  prevNode = control->page_list.prev;
+
+  if(prevNode->next == NULL) {
+    set_new_node_page();
+  }
+  currNode = prevNode->next;
+  currNode->addr = page;
+  currNode->ptr = page->ptr;
+  currNode->size = page->size;
+  currNode->id = page->id;
+  reset_bitmap(currNode->bitmap);
+
+  blk = make_free_block(currNode->ptr, currNode);
+
+  if(blk == 0);
+  /* point page_list.prev to the end of new page_list */
+  control->page_list.prev = currNode;
+}
+
+
+/**
+ * reduce free block size to fit request memory size.
+ * Add extra space to free list array.
+ **/
+void resize_block(kma_size_t reqSize, void *ptr, int blkSize) {
+  struct bud_controller *control;
+  struct free_block *temp, *curr;
+  void *temp_ptr;
+  int offset;
+  int i=0;
+  int lazy = 0;
+
+  control = bud_info();
+
+  curr = (struct free_block*)ptr;
+
+  offset = ((char*)ptr - (char*)curr->node->ptr)/MIN_BLK_SIZE;
+
+  
+  while(blkSize/reqSize >= 2 && blkSize > 32) {
+    lazy = 1;
+    blkSize = blkSize/2;
+    temp_ptr = (void*)((char*)ptr + blkSize);
+    for(i=HEADERSIZE - 1; i > -1; i--) {
+      if(control->freelist[i].size == blkSize) {
+        temp = make_free_block(temp_ptr, curr->node);
+        list_blk_insert(temp, control->freelist[i].blk);
+        break;
+      }
+    }
+
+  }
+
+  if(lazy == 1) {
+    for(i=0; i<2*blkSize/MIN_BLK_SIZE; i++) {
+      set_bit(curr->node->bitmap, i+offset);
+    }
+  }
+  else if(lazy == 0) {
+    if(get_blk_bit((ptr)) == 1) {
+
+      control->freelist[i].weight = control->freelist[i].weight + 2;
+    }
+    else
+    {
+      control->freelist[i].weight = control->freelist[i].weight + 1;
+    }
+    for(i=0; i<blkSize/MIN_BLK_SIZE; i++) {
+      set_bit(curr->node->bitmap, i+offset);
+    }
+    
+  }
+  else {
+    printf("error in resize_block\n");
+  }
+
+}
+
+
+void *allocate_mem(kma_size_t size) {
+//  struct page_node *currNode;
+  struct bud_controller *control;
+  void *ptr;
+//  kma_page_t *page;
+  int i=0;
+
+  control = bud_info();
+
+  control->used++;
+
+  for(i=0; i<HEADERSIZE; i++) {
+    if(size <= control->freelist[i].size) {
+      if(control->freelist[i].blk->next == NULL) {
+        continue;
+      }
+      else {
+        ptr = (void*)control->freelist[i].blk->next;
+        control->freelist[i].blk->next = control->freelist[i].blk->next->next;
+        resize_block(size, ptr, control->freelist[i].size);
+        return ptr;
+      }
+    }
+  }
+  new_free_page();
+  ptr = control->page_list.prev->ptr;
+  resize_block(size, ptr, (int)PAGESIZE);
+
+  return ptr;
+}
+
+void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
+  struct bud_controller *control;
+  struct free_block *blk, *prevBlk;
+
+  int offset;
+  int blkOffset;
+  int remainder;
+  void* prime_ptr;
+  int free = 1;
+  int i=0;
+  int p=0;
+  int found = 0;
+  int global = 0;
+
+
+  control = bud_info();
+  
+  offset = ((char*)ptr - (char*)currNode->ptr)/MIN_BLK_SIZE;
+  blkOffset = blkSize / MIN_BLK_SIZE;
+
+  remainder = offset % (2 * blkOffset);
+
+  for(p=0;p<HEADERSIZE; p++) {
+    if(control->freelist[p].size == blkSize) {
+      break;
+    }
+  }
+
+  if(blkSize == PAGESIZE) {
+    make_free_block(ptr, currNode);
+    list_blk_insert(ptr, control->freelist[p].blk);
+    reset_bitmap(currNode->bitmap);
+    return ;
+  }
+  
+  if(control->freelist[p].weight >= 2) {
+    global = 0;
+  }
+  else if(control->freelist[p].weight == 1) {
+    global = 1;
+  }
+  else if(control->freelist[p].weight == 0) {
+    global = 2;
+  }
+  if(remainder == 0 && global > 0) {
+    for(i=0;i<blkOffset;i++) {
+      if(get_bit(currNode->bitmap, offset+i+blkOffset) == 1) {
+        free = 0;
+        break;
+      }
+    }
+    if(free == 1) {
+      prime_ptr = (void*)((char*)ptr + blkSize);
+      blk = control->freelist[p].blk->next;
+      prevBlk = control->freelist[p].blk;
+      while(blk  != NULL) {
+        if(blk == prime_ptr) {
+          found = 1;
+          blk_remove(blk, prevBlk);
+          break;
+        }
+        prevBlk = blk;
+        blk = blk->next;
+      }
+      if(found == 0) {
+        printf("error, coalescing is error\n");
+      }
+
+      blkSize = 2 * blkSize;
+      return coalescing(ptr, blkSize, currNode);
+        
+    }
+    else if(free == 0) {
+      blk = make_free_block(ptr, currNode);
+      list_blk_insert(blk, control->freelist[p].blk);
+    } 
+  }
+  else if(remainder == blkOffset && global > 0) {
+    for(i=0; i<blkOffset;i++) {
+      if(get_bit(currNode->bitmap, offset+i-blkOffset) == 1) {
+        free = 0;
+        break;
+      }
+    }
+    if(free == 1) {
+      prime_ptr = (void*)((char*)ptr - blkSize);
+      blk = control->freelist[p].blk->next;
+      prevBlk = control->freelist[p].blk;
+      while(blk != NULL) {
+        if(blk == prime_ptr) {
+          found = 1;
+          blk_remove(blk,prevBlk);
+          break;
+        }
+        prevBlk = blk;
+        blk = blk->next;
+      }
+      if(found == 0) {
+        printf("error, coalescing is error\n");
+      }
+      blkSize = 2 * blkSize;
+      return coalescing(prime_ptr, blkSize, currNode);
+
+    }
+    else if(free == 0) {
+      blk = make_free_block(ptr, currNode);
+      list_blk_insert(blk, control->freelist[p].blk);
+    }
+  }
+ 
+  else if(global == 0) {
+
+    blk = make_free_block(ptr, currNode);
+    list_blk_insert(blk, control->freelist[p].blk);
+  }
+  else {
+    printf("Error in coalescing\n");
+  }
+}
+
+  
+
 void*
 kma_malloc(kma_size_t size)
 {
-  return NULL;
+  if(size > PAGESIZE)
+    return NULL;
+  if(page_entry == NULL)
+    init_page_entry();
+
+  return allocate_mem(size);
 }
 
-void
+void 
 kma_free(void* ptr, kma_size_t size)
 {
-  ;
+  struct bud_controller *control;
+  struct free_block *curr;
+  struct page_node *currNode ;
+  void *page_begin_addr;
+  int offset;
+//  kma_page_t *tempPage;
+  int i=0;
+  int j=0;
+
+  control = bud_info();
+
+  for(i=0; i<HEADERSIZE; i++) {
+    if(size <= control->freelist[i].size) {
+      curr = ptr;
+      curr->next = NULL;
+      page_begin_addr = current_page_begin_addr(ptr);
+      currNode = control->page_list.next;
+      while(currNode->ptr != page_begin_addr){
+        currNode = currNode->next;
+      }
+      curr->node = currNode;
+      offset = ((char*)ptr - (char*)currNode->ptr) / MIN_BLK_SIZE;
+      if(control->freelist[i].weight < 2) {
+        for(j=0; j< control->freelist[i].size/MIN_BLK_SIZE; j++) {
+          clear_bit(currNode->bitmap, j+offset);
+        }
+      }
+      coalescing(ptr, control->freelist[i].size, currNode);
+      if(control->freelist[i].weight >= 2) {
+        control->freelist[i].weight = control->freelist[i].weight - 2;
+      }
+      else if(control->freelist[i].weight == 1) {
+        control->freelist[i].weight = 0;
+      }
+      else if(control->freelist[i].weight == 0) {
+        control->freelist[i].weight = 0;
+      }
+      break;
+    }
+  }
+
+  control->free++;
+
+  if(control->free == control->used) {
+    currNode = control->page_list.next;
+    
+    while(currNode != control->page_list.prev) {
+      free_page(currNode->addr);
+      currNode = currNode->next;
+    }
+    free_page(currNode->addr);
+
+    for(i=0; i<15; i++) {
+      if(control->node_list_page[i] != NULL) {
+        free_page(control->node_list_page[i]);
+      }
+    }
+    free_page(page_entry);
+    page_entry = NULL;
+  }
 }
+
 
 #endif // KMA_LZBUD

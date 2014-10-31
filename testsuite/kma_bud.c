@@ -42,6 +42,8 @@
 /************System include***********************************************/
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
 
 /************Private include**********************************************/
 #include "kma_page.h"
@@ -228,7 +230,7 @@ void init_page_entry() {
   }
     
   control->page_list.size = 0;
-  control->page_list.id = temp;
+  control->page_list.id = 0;
   control->page_list.addr = NULL;    
   control->page_list.ptr = NULL;
   control->page_list.prev = &(control->page_list);
@@ -237,7 +239,7 @@ void init_page_entry() {
   currNode = (struct page_node*)((char*)temp + sizeof(struct free_block));
 
   prevNode = &(control->page_list);
-  while(currNode + 1 <= page_end_addr) {
+  while(currNode + 1 <= (struct page_node*)page_end_addr) {
     currNode->size = FREE_PAGE;
     node_list_append(currNode, prevNode);
     prevNode = currNode;
@@ -312,6 +314,7 @@ void new_free_page() {
 
   blk = make_free_block(currNode->ptr, currNode);
 
+  if(blk == 0);
   /* point page_list.prev to the end of new page_list */
   control->page_list.prev = currNode;
 }
@@ -355,10 +358,10 @@ void resize_block(kma_size_t reqSize, void *ptr, int blkSize) {
 
 
 void *allocate_mem(kma_size_t size) {
-  struct page_node *currNode;
+//  struct page_node *currNode;
   struct bud_controller *control;
   void *ptr;
-  kma_page_t *page;
+//  kma_page_t *page;
   int i=0;
 
   control = bud_info();
@@ -440,8 +443,7 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
         blk = blk->next;
       }
       if(found == 0) {
-        printf("error, coalescing is error, ptr: %x, blkSize: %d, currNode: %x\n",
-           *(int*)prime_ptr, blkSize, *(int*)currNode);
+        printf("error, coalescing is error\n");
       }
 
       blkSize = 2 * blkSize;
@@ -474,8 +476,7 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
         blk = blk->next;
       }
       if(found == 0) {
-        printf("error, coalescing is error, ptr: %x, blkSize: %d, currNode: %x\n",
-           * (int*)prime_ptr, blkSize, *(int*)currNode);
+        printf("error, coalescing is error\n");
       }
       blkSize = 2 * blkSize;
       return coalescing(prime_ptr, blkSize, currNode);
@@ -514,7 +515,7 @@ kma_free(void* ptr, kma_size_t size)
   struct page_node *currNode ;
   void *page_begin_addr;
   int offset;
-  kma_page_t *tempPage;
+//  kma_page_t *tempPage;
   int i=0;
   int j=0;
 
