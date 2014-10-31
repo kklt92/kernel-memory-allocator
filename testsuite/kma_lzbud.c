@@ -80,6 +80,7 @@ struct page_header {
 
 struct list_header {
   int size;
+  int weight;
   struct free_block *blk;
 };
 
@@ -161,6 +162,16 @@ void reset_bitmap(int A[]) {
   }
 }
 
+int get_blk_bit(struct free_block *blk) {
+  int k;
+
+  k = ((char*)blk - (char*)(current_page_begin_addr((void*)blk))) / MIN_BLK_SIZE;
+
+  return get_bit(blk->node->bitmap, k);
+}
+
+
+
 
 void list_blk_insert(struct free_block *block, struct free_block  *l) {
   if(l->next == NULL) {
@@ -214,6 +225,7 @@ void init_page_entry() {
   int i=0;
   for(i=0; i<HEADERSIZE; i++) {
     control->freelist[i].size = (int)(pow((double)2,(double) (i+5)));
+    control->freelist[i].weight = 0;
     temp = (struct free_block*)((char*)page_entry->ptr + sizeof(struct page_header) 
         + sizeof(struct bud_controller) + i * (sizeof(struct free_block)));
     control->freelist[i].blk = temp;
@@ -332,6 +344,7 @@ void resize_block(kma_size_t reqSize, void *ptr, int blkSize) {
   void *temp_ptr;
   int offset;
   int i=0;
+  int lazy = 0;
 
   control = bud_info();
 
@@ -340,22 +353,43 @@ void resize_block(kma_size_t reqSize, void *ptr, int blkSize) {
   offset = ((char*)ptr - (char*)curr->node->ptr)/MIN_BLK_SIZE;
 
   
-    while(blkSize/reqSize >= 2 && blkSize > 32) {
-      blkSize = blkSize/2;
-      temp_ptr = (void*)((char*)ptr + blkSize);
-      for(i=HEADERSIZE - 1; i > -1; i--) {
-        if(control->freelist[i].size == blkSize) {
-          temp = make_free_block(temp_ptr, curr->node);
-          list_blk_insert(temp, control->freelist[i].blk);
-          break;
-        }
+  while(blkSize/reqSize >= 2 && blkSize > 32) {
+    lazy = 1;
+    blkSize = blkSize/2;
+    temp_ptr = (void*)((char*)ptr + blkSize);
+    for(i=HEADERSIZE - 1; i > -1; i--) {
+      if(control->freelist[i].size == blkSize) {
+        temp = make_free_block(temp_ptr, curr->node);
+        list_blk_insert(temp, control->freelist[i].blk);
+        break;
       }
-    
+    }
+
   }
 
-  for(i=0; i<blkSize/MIN_BLK_SIZE; i++) {
-    set_bit(curr->node->bitmap, i+offset);
+  if(lazy == 1) {
+    for(i=0; i<2*blkSize/MIN_BLK_SIZE; i++) {
+      set_bit(curr->node->bitmap, i+offset);
+    }
   }
+  else if(lazy == 0) {
+    if(get_blk_bit((ptr)) == 1) {
+
+      control->freelist[i].weight = control->freelist[i].weight + 2;
+    }
+    else
+    {
+      control->freelist[i].weight = control->freelist[i].weight + 1;
+    }
+    for(i=0; i<blkSize/MIN_BLK_SIZE; i++) {
+      set_bit(curr->node->bitmap, i+offset);
+    }
+    
+  }
+  else {
+    printf("error in resize_block\n");
+  }
+
 }
 
 
@@ -402,6 +436,7 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
   int i=0;
   int p=0;
   int found = 0;
+  int global = 0;
 
 
   control = bud_info();
@@ -424,7 +459,16 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
     return ;
   }
   
-  if(remainder == 0) {
+  if(control->freelist[p].weight >= 2) {
+    global = 0;
+  }
+  else if(control->freelist[p].weight == 1) {
+    global = 1;
+  }
+  else if(control->freelist[p].weight == 0) {
+    global = 2;
+  }
+  if(remainder == 0 && global > 0) {
     for(i=0;i<blkOffset;i++) {
       if(get_bit(currNode->bitmap, offset+i+blkOffset) == 1) {
         free = 0;
@@ -457,7 +501,7 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
       list_blk_insert(blk, control->freelist[p].blk);
     } 
   }
-  else if(remainder == blkOffset) {
+  else if(remainder == blkOffset && global > 0) {
     for(i=0; i<blkOffset;i++) {
       if(get_bit(currNode->bitmap, offset+i-blkOffset) == 1) {
         free = 0;
@@ -490,10 +534,14 @@ void coalescing(void *ptr, int blkSize, struct page_node *currNode) {
     }
   }
  
+  else if(global == 0) {
+
+    blk = make_free_block(ptr, currNode);
+    list_blk_insert(blk, control->freelist[p].blk);
+  }
   else {
     printf("Error in coalescing\n");
   }
-
 }
 
   
@@ -534,10 +582,21 @@ kma_free(void* ptr, kma_size_t size)
       }
       curr->node = currNode;
       offset = ((char*)ptr - (char*)currNode->ptr) / MIN_BLK_SIZE;
-      for(j=0; j< control->freelist[i].size/MIN_BLK_SIZE; j++) {
-        clear_bit(currNode->bitmap, j+offset);
+      if(control->freelist[i].weight < 2) {
+        for(j=0; j< control->freelist[i].size/MIN_BLK_SIZE; j++) {
+          clear_bit(currNode->bitmap, j+offset);
+        }
       }
       coalescing(ptr, control->freelist[i].size, currNode);
+      if(control->freelist[i].weight >= 2) {
+        control->freelist[i].weight = control->freelist[i].weight - 2;
+      }
+      else if(control->freelist[i].weight == 1) {
+        control->freelist[i].weight = 0;
+      }
+      else if(control->freelist[i].weight == 0) {
+        control->freelist[i].weight = 0;
+      }
       break;
     }
   }
@@ -561,11 +620,6 @@ kma_free(void* ptr, kma_size_t size)
     free_page(page_entry);
     page_entry = NULL;
   }
-
-
-
-  
-  
 }
 
 
