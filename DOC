@@ -1,0 +1,247 @@
+Implemented:     Resource Map (first fit)
+                           Buddy System
+                           SVR4 Lazy Buddy
+                           Power of 2 Free List
+                           McKusick-Karels
+
+
+
+====== Resource Map ======
+The resource map provides a simple allocator. It is easy to implement. It can allocate the exact number of bytes requested without wasting space. The client can release any part of the region as well. The allocator coalesces adjacent free regions, allowing memory to be reused for different sized requests. However, the maps become really fragmented. Low utilization has occurred. In order to find a free region that is large enough, it will take time as fragmentation increases. That is why trace 4 and trace 5 take longer time.
+
+====== Buddy System ======
+The buddy system has quite good average resource utilization, because it tries to coalesce adjacent regions whenever possible to create larger free regions that can then be split and allocated again on request. As we test the traces, when there are a lot of requests, buddy system used much less pages than Power of two free lists and McKusick-Karels . Worse case could happen when allocator try to coalesce regions every time, and immediately split them again to serve the alloc request. However, it takes longer when there are a lot of requests, presumably due to the cost of checking for coalescable regions.
+
+
+====== SVR4 Lazy Buddy ======
+The SVR4 lazy buddy is an improvement of the buddy system. It is pretty efficient. No time is wasted in coalescing and splitting. Even when a list is in the accelerated state, the allocator coalesces at most two buffers on each request. Therefore, in the worst-case situation, there are at most two coalescing delays per class, which is at most twice as bad as the simple buddy system. As we can see in the running cases. The SVR4 lazy buddy system is pretty similar to the buddy system but faster and more efficient. However, it still suffers from internal fragmentation and still doesn't address the problem of buffer initialization or destruction.
+
+
+====== Power of 2 Free List ======
+The power of 2 free list is simply and reasonably fast. It avoids the linear searches and eliminates the fragmentation problem. In situations where a buffer is available, its worst-case performance is well bounded. However there will be a lot of unused space in the buffer, resulting in poor memory utilization. Also, many memory requests are for an exact power-of-two bytes. Therefore, the wastage is too much, since the request must be rounded to the next power of two to allow for the header. As we can see in the case running, for the cases that have more requests like trace 4 and 5, it runs very fast. But we use more pages.
+
+
+====== McKusick-Karels ======
+The McKusick-Karels algorithm is a significant improvement over the simple power-of-two allocator. It is faster, as we can see in the case running. waste less memory, and can handle large and small requests efficiently. However, like the power of 2 free list approach, there is no provision for moving memory from one list to another. There is also no way to return memory to the paging system. For the last two traces, we use more pages.
+
+
+
+====== Case Run ======
+
+Resource Map:  
+Trace1: ./kma_competition: Running in competition mode
+             Page Requested/Freed/In Use:     4/    4/    0
+             Competition average ratio: 10.379622
+             Test: PASS
+             real 0.01
+             user 0.00
+             sys 0.01    
+
+Trace 2: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:    43/   43/    0
+              Competition average ratio: 2.452960
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.01
+
+Trace 3: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:   775/  775/    0
+              Competition average ratio: 20.660352
+              Test: PASS
+              real 0.04
+              user 0.02
+              sys 0.01
+
+Trace 4: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1242/ 1242/    0
+              Competition average ratio: 3.912758
+              Test: PASS
+              real 0.06
+              user 0.05
+              sys 0.01
+
+Trace 5: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:   919/  919/    0
+              Competition average ratio: 3.312301
+              Test: PASS
+              real 1.69
+              user 1.68
+              sys 0.01
+     
+
+
+Buddy System: 
+Trace 1: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:     4/    4/    0
+              Competition average ratio: 10.379622
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.01
+
+Trace 2: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:    43/   43/    0
+              Competition average ratio: 2.452960
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.01
+
+Trace 3: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:   775/  775/    0
+              Competition average ratio: 20.660352
+              Test: PASS
+              real 0.04
+              user 0.02
+              sys 0.01
+
+Trace 4: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1242/ 1242/    0
+              Competition average ratio: 3.912758
+              Test: PASS
+              real 0.06
+              user 0.05
+              sys 0.01
+
+Trace 5: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1013/ 1013/    0
+              Competition average ratio: 3.768398
+              Test: PASS
+              real 0.26
+              user 0.24
+              sys 0.01
+
+
+
+LZBUD: 
+Trace 1: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:     4/    4/    0
+              Competition average ratio: 10.379622
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.00
+
+Trace 2: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:    43/   43/    0
+              Competition average ratio: 2.452960
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.01
+
+Trace 3: ./kma_competition: Running in competition mode 
+              Page Requested/Freed/In Use:   775/  775/    0
+              Competition average ratio: 20.660355
+              Test: PASS
+              real 0.03
+              user 0.01
+              sys 0.01
+
+Trace 4: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1242/ 1242/    0
+              Competition average ratio: 3.912758
+              Test: PASS
+              real 0.05
+              user 0.03
+              sys 0.01
+
+Trace 5: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1014/ 1014/     0
+              Competition average ratio: 3.772689
+              Test: PASS
+              real 0.17
+              user 0.16
+              sys 0.01
+
+
+
+P2FL: 
+Trace 1: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:     9/    9/    0
+              Competition average ratio: 22.422276
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.01
+
+Trace 2: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:    74/   74/    0
+              Competition average ratio: 5.123972
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.01
+
+Trace 3: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1020/ 1020/    0
+              Competition average ratio: 27.512313
+              Test: PASS
+              real 0.02
+              user 0.01
+              sys 0.01
+
+Trace 4: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  2248/ 2248/    0
+              Competition average ratio: 7.895679
+              Test: PASS
+              real 0.02
+              user 0.01
+              sys 0.01
+
+Trace 5: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1361/ 1361/    0
+              Competition average ratio: 5.405706
+              Test: PASS
+              real 0.07
+              user 0.06
+              sys 0.01
+
+
+
+MCK2: 
+Trace 1: ./kma_competition: Running in competition mode 
+              Page Requested/Freed/In Use:    13/   13/    0
+              Competition average ratio: 38.896771
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.01
+
+Trace 2: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:    78/   78/    0
+              Competition average ratio: 5.987976
+              Test: PASS
+              real 0.01
+              user 0.00
+              sys 0.00
+
+Trace 3: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1016/ 1016/    0 
+              Competition average ratio: 27.418698
+              Test: PASS
+              real 0.02
+              user 0.01
+              sys 0.01
+
+Trace 4: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  2244/ 2244/    0
+              Competition average ratio: 7.874274
+              Test: PASS
+              real 0.05
+              user 0.01
+              sys 0.01
+
+Trace 5: ./kma_competition: Running in competition mode
+              Page Requested/Freed/In Use:  1356/ 1356/    0
+              Competition average ratio: 5.385369
+              Test: PASS
+              real 0.08
+              user 0.06
+              sys 0.01
+
+
+
+
+

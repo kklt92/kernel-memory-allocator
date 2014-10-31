@@ -221,11 +221,12 @@ kma_malloc(kma_size_t size)
   return mem_allocate(size);
 }
 
-void
+  void
 kma_free(void* ptr, kma_size_t size)
 {
   struct p2fl_controller *control;
   struct free_block *curr, *temp;
+  struct page_header *tempHeader;
   int i=0;
 
   control = plfl_info();
@@ -233,10 +234,17 @@ kma_free(void* ptr, kma_size_t size)
   /* free specific memory and re-add it to original list */
   for(i=0; i<HEADERSIZE; i++) {
     if(size <= control->lh[i].avai_size ) {
-      curr = ptr;
-      curr->next = NULL;
-      list_insert(curr, (control->lh[i].blk));
-      break;
+        curr = ptr;
+      if(i == HEADERSIZE) {
+        tempHeader = (struct page_header*)((char*)ptr - sizeof(struct page_header));
+        free_page(tempHeader->page);
+        break;
+      }
+      else {
+        curr->next = NULL;
+        list_insert(curr, (control->lh[i].blk));
+        break;
+      }
     }
   }
 
